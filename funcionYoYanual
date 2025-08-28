@@ -1,0 +1,47 @@
+// fnYoY_Anual
+// Promedia totales anuales por entidad y calcula variación interanual.
+// Parámetros:
+//  - tbl: tabla de hechos
+//  - dateCol: nombre de la columna fecha (texto)
+//  - entityCol: nombre de la columna de entidad (texto)
+//  - valueCol: nombre de la columna métrica (texto)
+//  - optionalYear: año concreto (nullable); si null calcula todos
+(tbl as table, dateCol as text, entityCol as text, valueCol as text, optionalYear as nullable number) as table =>
+let
+    // Tipado y columnas auxiliares
+    T1      = Table.TransformColumnTypes(tbl, {{dateCol, type date}}),
+    AddYear = Table.AddColumn(T1, "Año", each Date.Year(Record.Field(_, dateCol)), Int64.Type),
+
+    // (Opcional) filtrar solo año indicado y su anterior para eficiencia
+    YearsToKeep = if optionalYear <> null then {optionalYear, optionalYear - 1} else null,
+    TFil   = if YearsToKeep <> null 
+             then Table.SelectRows(AddYear, each List.Contains(YearsToKeep, [Año])) 
+             else AddYear,
+
+    // Totales por entidad y año
+    TotAnual = Table.Group(
+        TFil,
+        {entityCol, "Año"},
+        {{"Total", each List.Sum(Table.Column(_, valueCol)), type number}}
+    ),
+
+    // Desplazar año para traer el Año-1
+    Prev    = Table.RenameColumns(
+                Table.TransformColumns(TotAnual, {{"Año", each _ + 1, Int64.Type}}),
+                {{"Total", "Total_AñoPrev"}}
+              ),
+
+    // Join y cálculo de Δ y %YoY
+    Join    = Table.NestedJoin(TotAnual, {entityCol, "Año"}, Prev, {entityCol, "Año"}, "Prev", JoinKind.LeftOuter),
+    Exp     = Table.ExpandTableColumn(Join, "Prev", {"Total_AñoPrev"}, {"Total_AñoPrev"}),
+    AddΔ    = Table.AddColumn(Exp, "YoY_Δ", each if [Total_AñoPrev] <> null then [Total] - [Total_AñoPrev] else null, type number),
+    AddPct  = Table.AddColumn(AddΔ, "YoY_%", each if [Total_AñoPrev] = null or [Total_AñoPrev] = 0 then null else [YoY_Δ] / [Total_AñoPrev], type number)
+in
+    AddPct
+
+
+// Por Comercial (todos los años)
+//fnYoY_Anual(Ventas, "Fecha", "IdComercial", "Importe", null)
+
+// Por Cliente (solo 2024)
+//fnYoY_Anual(Ventas, "Fecha", "IdCliente", "Importe", 2024)
